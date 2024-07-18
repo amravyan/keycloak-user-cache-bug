@@ -1,0 +1,95 @@
+x-postgres: &postgres_common
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: passw0rd
+    volumes:
+      - ./pg-data:/var/lib/postgresql/data
+    networks: [keycloak]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+x-keycloak: &keycloak_common
+    image: quay.io/keycloak/keycloak:24.0.1
+    # image: keycloak:6376db0f # last ok
+    # image: keycloak:7855b933-fixed
+    entrypoint:
+      - /bin/bash
+      - -c
+      - /opt/keycloak/bin/kc.sh build && /opt/keycloak/bin/kc.sh show-config && /opt/keycloak/bin/kc.sh --verbose start
+    environment: &keycloak_env
+      KC_CACHE: ispn
+      KC_CACHE_STACK: tcp
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: passw0rd
+      KC_PROXY: edge
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_STRICT_HTTPS: false
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      QUARKUS_TRANSACTION_MANAGER_ENABLE_RECOVERY: true
+    networks: [keycloak]
+    volumes:
+      - ./cache-ispn-local-13.xml:/opt/keycloak/conf/cache-ispn.xml
+      - ./keycloak.conf:/opt/keycloak/conf/keycloak.conf
+      - ./quarkus.properties:/opt/keycloak/conf/quarkus.properties
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080;echo -e \"GET /auth/health/ready HTTP/1.1\r\nhost: http://localhost\r\nConnection: close\r\n\r\n\" >&3;grep \"HTTP/1.1 200 OK\" <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    depends_on: &common_dep
+      postgres:
+        condition: service_healthy
+
+services:
+  postgres:
+    <<: *postgres_common
+
+  keycloak1:
+    <<: *keycloak_common
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+    environment:
+      <<: *keycloak_env
+      KC_HOSTNAME_PORT: '8080'
+    depends_on:
+      <<: *common_dep
+
+  keycloak2:
+    <<: *keycloak_common
+    ports:
+      - "8081:8080"
+      - "9001:9000"
+    environment:
+      <<: *keycloak_env
+      KC_HOSTNAME_PORT: '8081'
+    depends_on:
+      <<: *common_dep
+      keycloak1:
+        condition: service_healthy
+
+  keycloak3:
+    <<: *keycloak_common
+    ports:
+      - "8082:8080"
+      - "9002:9000"
+    environment:
+      <<: *keycloak_env
+      KC_HOSTNAME_PORT: '8082'
+    depends_on:
+      <<: *common_dep
+      keycloak1:
+        condition: service_healthy
+      keycloak2:
+        condition: service_healthy
+
+networks:
+  keycloak:
